@@ -3,23 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>KnitKeeper Web (PDF対応)</title>
-    <!-- PDF.js ライブラリの読み込み -->
+    <title>KnitKeeper Web (Zoom対応)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>
-        // PDF.jsのワーカー設定
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     </script>
     <style>
-        /* --- スタイル定義 (前回と同じベース + PDF用追加) --- */
         :root {
             --primary-color: #6a4c93;
             --bg-color: #f5f5f7;
             --text-color: #333;
             --marker-color: rgba(255, 0, 0, 0.6);
         }
-
-        * { box-sizing: border-box; touch-action: manipulation; }
+        * { box-sizing: border-box; touch-action: none; /* ブラウザ標準のズーム等を無効化 */ }
 
         body {
             margin: 0; padding: 0;
@@ -36,79 +32,86 @@
             display: flex; justify-content: space-between; align-items: center;
             height: 50px; flex-shrink: 0;
         }
-
         input[type="file"] { font-size: 12px; max-width: 200px; }
         .clear-btn { font-size: 12px; background: #eee; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
 
-        /* 編み図エリア */
+        /* --- 編み図エリア (表示枠) --- */
         #pattern-area {
             flex-grow: 1;
             position: relative;
             background-color: #e0e0e0;
-            overflow: auto; /* コンテンツが大きい場合はスクロール */
+            overflow: hidden; /* はみ出した部分は隠す */
             display: flex;
+            align-items: center;
             justify-content: center;
-            align-items: flex-start; /* 上寄せにする */
         }
 
-        /* 画像とPDFキャンバスの共通スタイル */
+        /* --- 拡大縮小・移動用レイヤー --- */
+        #zoom-layer {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%;
+            /* 初期状態 */
+            transform-origin: 0 0;
+            transform: translate(0px, 0px) scale(1);
+            will-change: transform;
+        }
+
+        /* 画像とPDFキャンバス */
         .pattern-content {
-            max-width: 100%;
-            display: none; /* 初期非表示 */
-            margin: 0 auto;
+            width: 100%;
+            display: none;
+            user-select: none;
+            pointer-events: none; /* 画像自体のドラッグ防止 */
         }
-
+        
         #placeholder-text {
             position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%);
             color: #888; font-size: 14px;
+            pointer-events: none;
         }
 
-        /* PDFページ操作パネル */
+        /* PDFページ操作 */
         #pdf-controls {
-            position: absolute;
-            bottom: 10px;
-            left: 50%;
+            position: absolute; bottom: 10px; left: 50%;
             transform: translateX(-50%);
             background: rgba(0,0,0,0.6);
-            padding: 5px 15px;
-            border-radius: 20px;
-            display: none; /* PDF時のみ表示 */
-            align-items: center;
-            gap: 10px;
-            z-index: 20;
+            padding: 5px 15px; border-radius: 20px;
+            display: none; align-items: center; gap: 10px; z-index: 20;
         }
-        #pdf-controls button {
-            background: none; border: none; color: white; font-size: 18px; cursor: pointer;
-        }
+        #pdf-controls button { background: none; border: none; color: white; font-size: 18px; cursor: pointer; touch-action: manipulation; }
         #pdf-page-num { color: white; font-size: 14px; font-weight: bold; }
 
-        /* マーカー（赤いライン） */
+        /* --- マーカー --- */
         #marker-line {
-            position: absolute; top: 50px; left: 0;
+            position: absolute; top: 100px; left: 0;
             width: 100%; height: 4px;
             background-color: var(--marker-color);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            /* 線が細くなりすぎないよう scale(1/zoom) をJSで当てる手もあるが、今回はシンプルに */
             cursor: row-resize; z-index: 10;
         }
-        #marker-line::after { content: ''; position: absolute; top: -15px; bottom: -15px; left: 0; right: 0; }
+        /* タッチ判定領域を広げる */
+        #marker-line::after { content: ''; position: absolute; top: -20px; bottom: -20px; left: 0; right: 0; }
+        
         #marker-handle {
             position: absolute; right: 0; top: -12px;
-            background: red; color: white; font-size: 10px; padding: 2px 6px; border-radius: 4px 0 0 4px;
+            background: red; color: white; font-size: 10px; 
+            padding: 4px 8px; border-radius: 4px 0 0 4px;
         }
 
-        /* カウンターエリア */
+        /* --- カウンターエリア --- */
         #counter-area {
             height: 25%; background: #fff; border-top: 1px solid #ccc;
-            display: flex; flex-shrink: 0;
+            display: flex; flex-shrink: 0; z-index: 30;
         }
         .counter-box {
             flex: 1; display: flex; flex-direction: column;
             align-items: center; justify-content: center;
             border-right: 1px solid #eee; padding: 5px;
         }
-        .counter-label { font-size: 12px; color: #666; margin-bottom: 2px; }
         .counter-value { font-size: 42px; font-weight: bold; color: var(--primary-color); margin: 0; line-height: 1; }
+        .counter-label { font-size: 12px; color: #666; margin-bottom: 2px; }
         .btn-group { display: flex; gap: 10px; margin-top: 5px; align-items: center; }
         button { border: none; border-radius: 8px; cursor: pointer; font-weight: bold; touch-action: manipulation; }
         .btn-main { background-color: var(--primary-color); color: white; width: 60px; height: 50px; font-size: 24px; }
@@ -117,18 +120,17 @@
 
         /* メモエリア */
         #memo-area {
-            height: 15%; background: #fff; border-top: 1px solid #eee; padding: 5px 10px; flex-shrink: 0;
+            height: 15%; background: #fff; border-top: 1px solid #eee; padding: 5px 10px; flex-shrink: 0; z-index: 30;
         }
         textarea {
             width: 100%; height: 100%; border: none; resize: none;
-            font-size: 14px; outline: none; background: #fdfdfd;
+            font-size: 14px; outline: none; background: #fdfdfd; touch-action: pan-y; /* スクロール許可 */
         }
     </style>
 </head>
 <body>
 
     <header>
-        <!-- acceptに.pdfを追加 -->
         <input type="file" id="file-input" accept="image/*, .pdf">
         <button class="clear-btn" onclick="resetAllData()">全リセット</button>
     </header>
@@ -137,18 +139,17 @@
     <div id="pattern-area">
         <span id="placeholder-text">画像またはPDFを読み込んでください</span>
         
-        <!-- 画像表示用 -->
-        <img id="pattern-img" class="pattern-content" alt="編み図">
-        
-        <!-- PDF表示用キャンバス -->
-        <canvas id="pattern-canvas" class="pattern-content"></canvas>
-        
-        <!-- マーカーライン -->
-        <div id="marker-line">
-            <div id="marker-handle">MOVE</div>
+        <!-- ズーム・移動用のラッパー -->
+        <div id="zoom-layer">
+            <img id="pattern-img" class="pattern-content" alt="編み図">
+            <canvas id="pattern-canvas" class="pattern-content"></canvas>
+            
+            <!-- マーカーもこの中に入れることで一緒に拡大縮小される -->
+            <div id="marker-line">
+                <div id="marker-handle">MOVE</div>
+            </div>
         </div>
 
-        <!-- PDFページ操作 (PDFの時だけ表示) -->
         <div id="pdf-controls">
             <button onclick="changePdfPage(-1)">◀</button>
             <span id="pdf-page-num">1 / 1</span>
@@ -180,33 +181,163 @@
 
     <!-- エリアC: メモ -->
     <div id="memo-area">
-        <textarea id="memo-text" placeholder="メモを入力... (例: 10段目で色替え)"></textarea>
+        <textarea id="memo-text" placeholder="メモを入力..."></textarea>
     </div>
 
     <script>
         // --- 状態管理 ---
         const state = {
-            row: 0,
-            stitch: 0,
-            memo: "",
-            markerTop: 50,
-            fileType: null, // 'image' or 'pdf'
-            fileData: null, // DataURL string
-            pdfPage: 1,     // Current PDF page
-            pdfDoc: null    // PDF document object (メモリ内保持)
+            row: 0, stitch: 0, memo: "",
+            markerTop: 100, // zoom-layer内での相対位置
+            fileType: null, fileData: null, pdfPage: 1, pdfDoc: null,
+            // ズーム・パン用
+            scale: 1, translateX: 0, translateY: 0
         };
 
         // --- 初期化 ---
         window.addEventListener('DOMContentLoaded', () => {
             loadData();
-            setupMarkerDrag();
+            setupInteractions(); // 統合された操作イベント
             setupMemoListener();
+            updateTransform();   // 初期位置反映
         });
 
-        // --- カウンター機能 ---
+        // --- 画面操作（ズーム・移動・マーカー）の統合ロジック ---
+        function setupInteractions() {
+            const container = document.getElementById('pattern-area');
+            const layer = document.getElementById('zoom-layer');
+            const marker = document.getElementById('marker-line');
+
+            let isDraggingMarker = false;
+            let isPanning = false;
+            let startX = 0, startY = 0;
+            let lastX = 0, lastY = 0;
+            let initialDist = 0;
+            let initialScale = 1;
+
+            // 1. マーカーの操作開始
+            const startMarkerDrag = (e) => {
+                isDraggingMarker = true;
+                e.stopPropagation(); // 親へのイベント伝播を止める（画面移動しないように）
+                // タッチ・マウス共通の開始座標
+                const clientY = e.clientY || e.touches[0].clientY;
+                startY = clientY;
+                // 現在のマーカー位置を記憶
+                lastY = state.markerTop;
+            };
+
+            // 2. 画面全体の操作開始（移動・ズーム）
+            const startPanZoom = (e) => {
+                if (e.touches && e.touches.length === 2) {
+                    // ピンチズーム開始
+                    isPanning = false;
+                    initialDist = getDistance(e.touches);
+                    initialScale = state.scale;
+                } else {
+                    // パン（移動）開始
+                    isPanning = true;
+                    const clientX = e.clientX || e.touches[0].clientX;
+                    const clientY = e.clientY || e.touches[0].clientY;
+                    startX = clientX - state.translateX;
+                    startY = clientY - state.translateY;
+                }
+            };
+
+            // 3. 操作中（移動・ズーム・マーカー）
+            const onMove = (e) => {
+                // A. マーカー移動中
+                if (isDraggingMarker) {
+                    e.preventDefault();
+                    const clientY = e.clientY || e.touches[0].clientY;
+                    const deltaY = clientY - startY;
+                    
+                    // 拡大率を考慮して移動量を補正
+                    state.markerTop = lastY + (deltaY / state.scale);
+                    
+                    // 範囲制限 (簡易)
+                    if (state.markerTop < 0) state.markerTop = 0;
+                    
+                    marker.style.top = state.markerTop + "px";
+                    return;
+                }
+
+                // B. ピンチズーム中
+                if (e.touches && e.touches.length === 2) {
+                    e.preventDefault();
+                    const dist = getDistance(e.touches);
+                    if (initialDist > 0) {
+                        const newScale = initialScale * (dist / initialDist);
+                        // 拡大率の制限 (0.5倍 〜 5倍)
+                        state.scale = Math.min(Math.max(newScale, 0.5), 5);
+                        updateTransform();
+                    }
+                    return;
+                }
+
+                // C. パン（画像移動）中
+                if (isPanning) {
+                    e.preventDefault();
+                    const clientX = e.clientX || e.touches[0].clientX;
+                    const clientY = e.clientY || e.touches[0].clientY;
+                    state.translateX = clientX - startX;
+                    state.translateY = clientY - startY;
+                    updateTransform();
+                }
+            };
+
+            // 4. 操作終了
+            const onEnd = () => {
+                if (isDraggingMarker || isPanning || initialDist > 0) {
+                    saveData(); // 状態保存
+                }
+                isDraggingMarker = false;
+                isPanning = false;
+                initialDist = 0;
+            };
+
+            // イベント登録
+            marker.addEventListener('mousedown', startMarkerDrag);
+            marker.addEventListener('touchstart', startMarkerDrag, {passive: false});
+
+            container.addEventListener('mousedown', startPanZoom);
+            container.addEventListener('touchstart', startPanZoom, {passive: false});
+
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('touchmove', onMove, {passive: false});
+
+            window.addEventListener('mouseup', onEnd);
+            window.addEventListener('touchend', onEnd);
+
+            // PC用ホイールズーム (オマケ)
+            container.addEventListener('wheel', (e) => {
+                if (e.ctrlKey) {
+                    e.preventDefault();
+                    const delta = -e.deltaY * 0.01;
+                    state.scale = Math.min(Math.max(state.scale + delta, 0.5), 5);
+                    updateTransform();
+                }
+            }, {passive: false});
+        }
+
+        // 2点間の距離を計算
+        function getDistance(touches) {
+            const dx = touches[0].clientX - touches[1].clientX;
+            const dy = touches[0].clientY - touches[1].clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        // CSSへ反映
+        function updateTransform() {
+            const layer = document.getElementById('zoom-layer');
+            layer.style.transform = 
+                `translate(${state.translateX}px, ${state.translateY}px) scale(${state.scale})`;
+        }
+
+        // --- 以降、基本的な機能は前回と同様 ---
+
         function updateCount(type, change) {
             if (change === 0) {
-                if(!confirm(type === 'row' ? "段数をリセットしますか？" : "目数をリセットしますか？")) return;
+                if(!confirm("リセットしますか？")) return;
                 state[type] = 0;
             } else {
                 state[type] += change;
@@ -216,7 +347,6 @@
             saveData();
         }
 
-        // --- メモ機能 ---
         function setupMemoListener() {
             const memoEl = document.getElementById('memo-text');
             memoEl.addEventListener('input', (e) => {
@@ -225,7 +355,6 @@
             });
         }
 
-        // --- ファイル読み込み処理 ---
         const fileInput = document.getElementById('file-input');
         const imgEl = document.getElementById('pattern-img');
         const canvasEl = document.getElementById('pattern-canvas');
@@ -236,180 +365,100 @@
             const file = e.target.files[0];
             if (!file) return;
 
+            // ファイル読み込み時にズーム位置をリセット
+            state.scale = 1; state.translateX = 0; state.translateY = 0;
+            updateTransform();
+
             const reader = new FileReader();
             reader.onload = async (event) => {
                 const result = event.target.result;
-                
                 if (file.type === 'application/pdf') {
-                    // PDFの場合
-                    state.fileType = 'pdf';
-                    state.fileData = result;
-                    state.pdfPage = 1;
+                    state.fileType = 'pdf'; state.fileData = result; state.pdfPage = 1;
                     await renderPDF(result, 1);
                 } else {
-                    // 画像の場合
-                    state.fileType = 'image';
-                    state.fileData = result;
+                    state.fileType = 'image'; state.fileData = result;
                     showImage(result);
                 }
-                
-                // データ保存（容量制限により失敗する場合があるためtry-catch）
-                try {
-                    saveData();
-                } catch (err) {
-                    console.error("Storage limit exceeded", err);
-                    alert("ファイルサイズが大きいため、ブラウザを閉じると編み図が消える可能性があります。");
-                }
+                try { saveData(); } catch (err) { alert("ファイルが大きいため保存できませんでした"); }
             };
             reader.readAsDataURL(file);
         });
 
-        // --- 表示ロジック: 画像 ---
         function showImage(src) {
-            imgEl.src = src;
-            imgEl.style.display = 'block';
-            canvasEl.style.display = 'none';
-            pdfControls.style.display = 'none';
+            imgEl.src = src; imgEl.style.display = 'block';
+            canvasEl.style.display = 'none'; pdfControls.style.display = 'none';
             placeholder.style.display = 'none';
         }
 
-        // --- 表示ロジック: PDF ---
         async function renderPDF(dataUrl, pageNum) {
-            // PDFデータのロード
             const loadingTask = pdfjsLib.getDocument(dataUrl);
             state.pdfDoc = await loadingTask.promise;
-            
             updatePdfPageDisplay();
             renderPdfPage(pageNum);
-            
-            imgEl.style.display = 'none';
-            canvasEl.style.display = 'block';
-            pdfControls.style.display = 'flex';
-            placeholder.style.display = 'none';
+            imgEl.style.display = 'none'; canvasEl.style.display = 'block';
+            pdfControls.style.display = 'flex'; placeholder.style.display = 'none';
         }
 
         async function renderPdfPage(num) {
             if (!state.pdfDoc) return;
-            
             const page = await state.pdfDoc.getPage(num);
-            const scale = 1.5; // 画質向上のため少し拡大
+            const scale = 2.0; // 高画質化
             const viewport = page.getViewport({scale: scale});
-
             const context = canvasEl.getContext('2d');
-            canvasEl.height = viewport.height;
-            canvasEl.width = viewport.width;
-
-            // スマホ画面幅に合わせるCSSスタイル調整
-            canvasEl.style.width = '100%';
-            canvasEl.style.height = 'auto';
-
-            const renderContext = {
-                canvasContext: context,
-                viewport: viewport
-            };
-            await page.render(renderContext).promise;
+            canvasEl.height = viewport.height; canvasEl.width = viewport.width;
+            await page.render({canvasContext: context, viewport: viewport}).promise;
         }
 
         function changePdfPage(delta) {
             if (!state.pdfDoc) return;
             const newPage = state.pdfPage + delta;
             if (newPage >= 1 && newPage <= state.pdfDoc.numPages) {
-                state.pdfPage = newPage;
-                renderPdfPage(newPage);
-                updatePdfPageDisplay();
-                saveData(); // 現在のページ数を保存
+                state.pdfPage = newPage; renderPdfPage(newPage);
+                updatePdfPageDisplay(); saveData();
             }
         }
 
         function updatePdfPageDisplay() {
-            if (state.pdfDoc) {
-                document.getElementById('pdf-page-num').innerText = 
-                    `${state.pdfPage} / ${state.pdfDoc.numPages}`;
-            }
+            if (state.pdfDoc) document.getElementById('pdf-page-num').innerText = `${state.pdfPage} / ${state.pdfDoc.numPages}`;
         }
 
-        // --- マーカー操作 (前回と同じ) ---
-        function setupMarkerDrag() {
-            const marker = document.getElementById('marker-line');
-            const container = document.getElementById('pattern-area');
-            let isDragging = false;
-
-            const startDrag = (e) => { isDragging = true; e.preventDefault(); };
-            const onDrag = (e) => {
-                if (!isDragging) return;
-                const clientY = e.clientY || e.touches[0].clientY;
-                const containerRect = container.getBoundingClientRect();
-                // Patternエリア内の相対Y座標 + 現在のスクロール量
-                let newTop = (clientY - containerRect.top) + container.scrollTop;
-                
-                // 上端チェック (単純化)
-                if (newTop < 0) newTop = 0;
-                
-                marker.style.top = newTop + "px";
-                state.markerTop = newTop;
-            };
-            const endDrag = () => { if (isDragging) { isDragging = false; saveData(); } };
-
-            marker.addEventListener('mousedown', startDrag);
-            marker.addEventListener('touchstart', startDrag, {passive: false});
-            window.addEventListener('mousemove', onDrag);
-            window.addEventListener('touchmove', onDrag, {passive: false});
-            window.addEventListener('mouseup', endDrag);
-            window.addEventListener('touchend', endDrag);
-        }
-
-        // --- データ保存/復元 ---
         function saveData() {
-            // PDFファイル自体は非常に大きくなる可能性があるため、
-            // 永続化を試みるが、失敗しても他のデータ（カウンター等）は保存したい。
-            // そのため、ファイルデータだけ分けて処理する等の工夫が理想だが、
-            // 簡易実装として丸ごと保存を試みる。
             try {
-                // PDFオブジェクト自体は保存できないので除外
                 const { pdfDoc, ...saveState } = state; 
-                localStorage.setItem('knitApp_state_v2', JSON.stringify(saveState));
-            } catch (e) {
-                console.log("Storage quota exceeded. File not saved, but counters are kept in memory.");
-                // ファイルデータを除いてカウンターだけ保存するリカバリ処理
-                const { fileData, pdfDoc, ...lightState } = state;
-                localStorage.setItem('knitApp_state_v2', JSON.stringify(lightState));
-            }
+                localStorage.setItem('knitApp_state_v3', JSON.stringify(saveState));
+            } catch (e) { console.log("Save failed"); }
         }
 
         function loadData() {
-            const saved = localStorage.getItem('knitApp_state_v2');
+            const saved = localStorage.getItem('knitApp_state_v3');
             if (saved) {
-                const loadedState = JSON.parse(saved);
-                
-                state.row = loadedState.row || 0;
-                state.stitch = loadedState.stitch || 0;
+                const loaded = JSON.parse(saved);
+                state.row = loaded.row || 0;
+                state.stitch = loaded.stitch || 0;
+                state.memo = loaded.memo || "";
+                state.markerTop = loaded.markerTop || 100;
+                state.scale = loaded.scale || 1;
+                state.translateX = loaded.translateX || 0;
+                state.translateY = loaded.translateY || 0;
+
                 document.getElementById('row-val').innerText = state.row;
                 document.getElementById('stitch-val').innerText = state.stitch;
-
-                state.memo = loadedState.memo || "";
                 document.getElementById('memo-text').value = state.memo;
-
-                state.markerTop = loadedState.markerTop || 50;
                 document.getElementById('marker-line').style.top = state.markerTop + "px";
 
-                // ファイル復元
-                if (loadedState.fileData && loadedState.fileType) {
-                    state.fileType = loadedState.fileType;
-                    state.fileData = loadedState.fileData;
-                    state.pdfPage = loadedState.pdfPage || 1;
-
-                    if (state.fileType === 'pdf') {
-                        renderPDF(state.fileData, state.pdfPage);
-                    } else {
-                        showImage(state.fileData);
-                    }
+                if (loaded.fileData) {
+                    state.fileType = loaded.fileType;
+                    state.fileData = loaded.fileData;
+                    state.pdfPage = loaded.pdfPage || 1;
+                    if (state.fileType === 'pdf') renderPDF(state.fileData, state.pdfPage);
+                    else showImage(state.fileData);
                 }
             }
         }
 
         function resetAllData() {
             if(confirm("全てのデータを消去しますか？")) {
-                localStorage.removeItem('knitApp_state_v2');
+                localStorage.removeItem('knitApp_state_v3');
                 location.reload();
             }
         }
